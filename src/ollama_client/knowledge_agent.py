@@ -38,11 +38,11 @@ INTENT_PATTERNS = {
         r"找找\s*(.*)",
     ],
     "egg_query": [
+        r"(.*?)的蛋",
         r"(.*?)(?:蛋)(?:能孵出|孵化|出|是什么|有什么)",
         r"(?:查|找|看看)\s*(.*?)(?:蛋|孵化)",
         r"(?:蛋|孵化)\s*(.*?)(?:的\s*(?:精灵|宠物))?",
         r"什么.*?蛋.*?孵化",
-        r"(.*?)的蛋",
     ],
 }
 
@@ -142,6 +142,12 @@ def execute_knowledge_query(text: str) -> dict:
             lines = [f"🥚 {e['spirit_name']}的蛋" for e in eggs]
             reply = "找到以下蛋：\n" + "\n".join(lines)
             return {"type": "egg_list", "data": eggs, "reply": reply}
+        # 如果是进化形态没有蛋，提示基础形态
+        from src.core.database import query_spirit
+        spirit = query_spirit(keyword.strip())
+        if spirit:
+            reply = f"⚠️ {keyword}是进化形态，没有专属蛋哦~\n试试查它的基础形态(比如护主犬)的蛋！"
+            return {"type": "not_found", "data": None, "reply": reply}
         # 列出所有蛋
         if "所有" in text or "全部" in text or "列表" in text:
             all_eggs = query_all_eggs(30)
