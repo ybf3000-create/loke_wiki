@@ -6,6 +6,7 @@ from loguru import logger
 from src.core.database import (
     query_spirit, query_spirit_list, query_skill,
     query_type_effectiveness, query_item, full_text_search,
+    query_egg_by_name, query_egg_by_spirit, query_all_eggs,
 )
 from src.core.vector_store import search as vector_search
 
@@ -35,6 +36,13 @@ INTENT_PATTERNS = {
     "search": [
         r"(?:搜索|查找|搜一下)\s*(.*)",
         r"找找\s*(.*)",
+    ],
+    "egg_query": [
+        r"(.*?)(?:蛋)(?:能孵出|孵化|出|是什么|有什么)",
+        r"(?:查|找|看看)\s*(.*?)(?:蛋|孵化)",
+        r"(?:蛋|孵化)\s*(.*?)(?:的\s*(?:精灵|宠物))?",
+        r"什么.*?蛋.*?孵化",
+        r"(.*?)的蛋",
     ],
 }
 
@@ -115,6 +123,33 @@ def execute_knowledge_query(text: str) -> dict:
             return {"type": "item_detail", "data": item, "reply": reply}
         return {"type": "not_found", "data": None, "reply": "找不到这个道具的信息~"}
 
+    elif intent == "egg_query":
+        keyword = args[0] if args else text
+        # 去噪：去掉"的蛋""蛋""的"等
+        keyword = keyword.replace('的蛋','').replace('的','').replace('蛋','').strip()
+        # 按蛋名查
+        egg = query_egg_by_name(keyword.strip())
+        if egg:
+            reply = f"🥚 {egg['spirit_name']}的蛋"
+            if egg.get('image_path'):
+                # 蛋图片文件名: Egg_miaomiao.png
+                img_name = f"Egg_{egg['egg_name']}"
+                reply += f"\n[IMG:{img_name}]"
+            return {"type": "egg_detail", "data": egg, "reply": reply}
+        # 按精灵名查
+        eggs = query_egg_by_spirit(keyword.strip())
+        if eggs:
+            lines = [f"🥚 {e['spirit_name']}的蛋" for e in eggs]
+            reply = "找到以下蛋：\n" + "\n".join(lines)
+            return {"type": "egg_list", "data": eggs, "reply": reply}
+        # 列出所有蛋
+        if "所有" in text or "全部" in text or "列表" in text:
+            all_eggs = query_all_eggs(30)
+            lines = [f"🥚 {e['spirit_name']}" for e in all_eggs]
+            reply = f"精灵蛋列表（共{len(all_eggs)}种）：\n" + "\n".join(lines)
+            return {"type": "egg_list", "data": all_eggs, "reply": reply}
+        return {"type": "not_found", "data": None, "reply": "找不到这个蛋的信息~"}
+
     elif intent == "search":
         keyword = args[0] if args else text
         results = full_text_search(keyword.strip())
@@ -125,7 +160,20 @@ def execute_knowledge_query(text: str) -> dict:
         return {"type": "not_found", "data": None, "reply": "搜索不到相关内容~"}
 
     else:
-        # general - 向量检索
+        # general - 先查SQLite，再查向量库
+        spirit = query_spirit(text)
+        if spirit:
+            reply = _format_spirit_reply(spirit)
+            return {"type": "spirit_detail", "data": spirit, "reply": reply}
+        skill = query_skill(text)
+        if skill:
+            reply = _format_skill_reply(skill)
+            return {"type": "skill_detail", "data": skill, "reply": reply}
+        results = full_text_search(text)
+        if results:
+            lines = [f"  • {r['name']} ({'精灵' if r['type']=='spirit' else '技能' if r['type']=='skill' else '道具'})" for r in results]
+            reply = "🔍 找到以下相关内容：\n" + "\n".join(lines)
+            return {"type": "search", "data": results, "reply": reply}
         vec = vector_search(text, n_results=3)
         if vec:
             reply = "🤔 我找到了以下相关资料：\n" + "\n---\n".join(v["text"] for v in vec)

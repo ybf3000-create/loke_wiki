@@ -79,6 +79,17 @@ def init_db():
                 image_path  TEXT
             )
         """)
+        # 精灵蛋表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS eggs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                egg_name    TEXT NOT NULL UNIQUE,
+                spirit_name TEXT,
+                image_path  TEXT,
+                category    TEXT DEFAULT '普通',
+                created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         logger.info("数据库初始化完成")
     conn.close()
 
@@ -193,3 +204,44 @@ def full_text_search(keyword: str, limit: int = 5) -> list:
     finally:
         conn.close()
     return results
+
+
+# ======================== 蛋查询 ========================
+
+def query_egg_by_name(egg_name: str) -> dict | None:
+    """根据蛋名或精灵名查询蛋信息"""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM eggs WHERE egg_name = ? OR egg_name LIKE ? OR spirit_name = ? OR spirit_name LIKE ?",
+            (egg_name, f"%{egg_name}%", egg_name, f"%{egg_name}%")
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def query_egg_by_spirit(spirit_name: str) -> list[dict]:
+    """根据精灵名查询它的蛋"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM eggs WHERE spirit_name LIKE ?",
+            (f"%{spirit_name}%",)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def query_all_eggs(limit: int = 20) -> list[dict]:
+    """列出所有蛋"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM eggs ORDER BY spirit_name LIMIT ?",
+            (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()

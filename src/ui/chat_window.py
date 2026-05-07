@@ -62,6 +62,11 @@ class BubbleFrame(QFrame):
                 img_path = Path(self._images_dir) / f"{content}.png"
                 if not img_path.exists():
                     img_path = Path(self._images_dir) / f"{content}.jpg"
+                # 蛋图片在 eggs/ 子目录
+                if not img_path.exists():
+                    img_path = Path(self._images_dir) / "eggs" / f"{content}.png"
+                if not img_path.exists():
+                    img_path = Path(self._images_dir) / "eggs" / f"{content}.jpg"
                 if img_path.exists():
                     pix = QPixmap(str(img_path))
                     if not pix.isNull():
