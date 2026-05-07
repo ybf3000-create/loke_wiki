@@ -6,7 +6,7 @@ from loguru import logger
 from src.core.database import (
     query_spirit, query_spirit_list, query_skill,
     query_type_effectiveness, query_item, full_text_search,
-    query_egg_by_name, query_egg_by_spirit, query_all_eggs,
+    query_egg_by_name, query_egg_by_spirit, query_all_eggs, query_egg_fuzzy,
 )
 from src.core.vector_store import search as vector_search
 
@@ -146,7 +146,21 @@ def execute_knowledge_query(text: str) -> dict:
         from src.core.database import query_spirit
         spirit = query_spirit(keyword.strip())
         if spirit:
-            reply = f"⚠️ {keyword}是进化形态，没有专属蛋哦~\n试试查它的基础形态(比如护主犬)的蛋！"
+            # 模糊搜索蛋表，找最接近的蛋
+            fuzzy = query_egg_fuzzy(keyword.strip())
+            if fuzzy:
+                # 去重，只保留3个最相关的
+                seen = set()
+                suggestions = []
+                for f in fuzzy:
+                    if f['spirit_name'] not in seen:
+                        seen.add(f['spirit_name'])
+                        suggestions.append(f['spirit_name'])
+                    if len(suggestions) >= 3:
+                        break
+                reply = f"⚠️ {keyword}是进化形态，没有专属蛋哦~\n试试查这些基础形态的蛋：{'、'.join(suggestions)}"
+            else:
+                reply = f"⚠️ {keyword}是进化形态，没有专属蛋哦~\n试试查它的基础形态的蛋！"
             return {"type": "not_found", "data": None, "reply": reply}
         # 列出所有蛋
         if "所有" in text or "全部" in text or "列表" in text:

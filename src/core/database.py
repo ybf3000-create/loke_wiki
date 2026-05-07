@@ -245,3 +245,33 @@ def query_all_eggs(limit: int = 20) -> list[dict]:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+def query_egg_fuzzy(text: str) -> list[dict]:
+    """模糊搜索蛋：按关键词逐字拆解匹配精灵名"""
+    conn = get_connection()
+    try:
+        # 先用整词搜
+        rows = conn.execute(
+            "SELECT * FROM eggs WHERE spirit_name LIKE ?",
+            (f"%{text}%",)
+        ).fetchall()
+        if rows:
+            return [dict(r) for r in rows]
+        # 逐字拆解：取所有字符组合去匹配
+        chars = list(text)
+        candidates = set()
+        # 按每个字搜
+        for c in chars:
+            if '\u4e00' <= c <= '\u9fff':  # 只搜中文字
+                r = conn.execute(
+                    "SELECT egg_name, spirit_name FROM eggs WHERE spirit_name LIKE ?",
+                    (f"%{c}%",)
+                ).fetchall()
+                for row in r:
+                    candidates.add((row[0], row[1]))
+        if candidates:
+            return [{"egg_name": e, "spirit_name": s} for e, s in candidates]
+        return []
+    finally:
+        conn.close()
