@@ -25,6 +25,7 @@ from src.ollama_client import OllamaClient, test_connection
 from src.ollama_client.knowledge_agent import execute_knowledge_query
 from src.ui.tray_manager import TrayManager
 from src.voice.voice_module import VoiceModule
+from src.check_deps import check_and_install
 
 
 def _get_font(size=10, bold=False):
@@ -165,7 +166,14 @@ class ChatWindow(QMainWindow):
         self.tray = TrayManager(self)  # 必须在UI初始化之后
 
     def _init_voice(self):
-        """初始化语音模块"""
+        """初始化语音模块（自动检测并安装缺失依赖）"""
+        # 检查并安装三个语音依赖
+        for pkg, imp in [
+            ("sounddevice", None),
+            ("SpeechRecognition", "speech_recognition"),
+            ("pyttsx3", None),
+        ]:
+            check_and_install(pkg, imp or pkg)
         try:
             self.voice = VoiceModule()
             ok = self.voice.initialize()
