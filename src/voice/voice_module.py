@@ -1,24 +1,29 @@
 # src/voice/voice_module.py
-# 语音交互模块框架（预留 MOSS-TTS-Nano 接口）
+# 语音交互模块（sounddevice + SpeechRecognition + pyttsx3）
 
+import threading
+import queue
+import numpy as np
+from pathlib import Path
 from loguru import logger
-from config.settings import VOICE_ENABLED, VOICE_WAKE_WORD
+
+from config.settings import VOICE_WAKE_WORD
 
 
 class VoiceModule:
     """
-    语音交互模块（骨架代码）
+    语音交互模块
     
-    使用说明：
-    1. 安装依赖：pip install SpeechRecognition pyaudio
-    2. 安装 MOSS-TTS-Nano：参照项目文档部署
-    3. 将 VOICE_ENABLED 设为 True
-    4. 实现以下三个核心方法
+    组件：
+    - sounddevice: 麦克风录音（比pyaudio安装简单）
+    - SpeechRecognition: 语音转文字(ASR)
+    - pyttsx3: 文字转语音(TTS)，离线可用
     
-    流程：
-    用户语音 → ASR (SpeechRecognition/Whisper) → 文字
-    文字 → 知识库查询 → AI回复
-    AI回复 → TTS (MOSS-TTS-Nano) → 语音朗读
+    用法：
+    vm = VoiceModule()
+    vm.initialize()
+    text = vm.listen_once()  # 录一次音转文字
+    vm.speak("你好")  # 朗读
     """
 
     def __init__(self, wake_word: str = VOICE_WAKE_WORD):
@@ -26,62 +31,120 @@ class VoiceModule:
         self.is_listening = False
         self.recognizer = None
         self.tts_engine = None
+        self._audio_queue = queue.Queue()
+        self._sample_rate = 16000
 
     def initialize(self) -> bool:
-        """初始化语音识别和TTS引擎"""
+        """初始化语音引擎"""
         try:
             import speech_recognition as sr
             self.recognizer = sr.Recognizer()
+            # 调整环境噪声适应
+            self.recognizer.dynamic_energy_threshold = True
+            self.recognizer.energy_threshold = 4000
             logger.info("SpeechRecognition 已加载")
         except ImportError:
-            logger.error("请先安装 SpeechRecognition: pip install SpeechRecognition pyaudio")
+            logger.error("请安装: pip install SpeechRecognition sounddevice")
             return False
-        # TODO: 初始化 MOSS-TTS-Nano
-        # from moss_tts import TTS
-        # self.tts_engine = TTS(...)
-        logger.info("语音模块初始化完成（骨架模式，TTS未接入）")
+
+        try:
+            import pyttsx3
+            self.tts_engine = pyttsx3.init()
+            # 设置中文语音（Windows自带）
+            voices = self.tts_engine.getProperty('voices')
+            for v in voices:
+                if 'Chinese' in v.name or 'chinese' in v.id:
+                    self.tts_engine.setProperty('voice', v.id)
+                    break
+            self.tts_engine.setProperty('rate', 180)  # 语速
+            self.tts_engine.setProperty('volume', 0.9)
+            logger.info("pyttsx3 TTS 已加载")
+        except ImportError:
+            logger.warning("pyttsx3 未安装，TTS不可用: pip install pyttsx3")
+
         return True
 
-    def listen(self, timeout: float = 3.0) -> str | None:
+    def listen_once(self, timeout: float = 5.0, phrase_limit: float = 10.0) -> str | None:
         """
-        监听麦克风输入，返回识别文字
-        - 检测唤醒词（如「小智」）后开始识别
-        - timeout: 静默超时秒数
+        录制一次语音并转为文字
+        returns: 识别出的文字，失败返回 None
         """
         if not self.recognizer:
             logger.error("语音模块未初始化")
             return None
-        # 实际实现
-        # with sr.Microphone() as source:
-        #     self.recognizer.adjust_for_ambient_noise(source)
-        #     audio = self.recognizer.listen(source, timeout=timeout)
-        #     text = self.recognizer.recognize_google(audio, language='zh-CN')
-        #     if self.wake_word in text:
-        #         return text.replace(self.wake_word, '').strip()
-        #     return None
-        logger.info(f"语音监听中（待实现 - 唤醒词: {self.wake_word}）")
-        return None
+
+        try:
+            import sounddevice as sd
+
+            def callback(indata, frames, time_info, status):
+                if status:
+                    logger.debug(f"录音状态: {status}")
+                self._audio_queue.put(indata.copy())
+
+            # 录音
+            self._audio_queue.queue.clear()
+            recorded = []
+
+            with sd.InputStream(
+                samplerate=self._sample_rate,
+                channels=1,
+                dtype='float32',
+                callback=callback
+            ):
+                import time
+                start = time.time()
+                while time.time() - start < timeout:
+                    try:
+                        data = self._audio_queue.get(timeout=0.1)
+                        recorded.append(data)
+                    except queue.Empty:
+                        pass
+                    # 检测静音结束
+                    if recorded and len(recorded) > 5:
+                        last = np.concatenate(recorded[-5:])
+                        if np.max(np.abs(last)) < 0.02:
+                            break
+
+            if not recorded:
+                return None
+
+            audio_data = np.concatenate(recorded)
+            # 转16-bit PCM
+            audio_int16 = (audio_data * 32767).astype(np.int16)
+
+            # 用 SpeechRecognition 识别
+            import speech_recognition as sr
+            audio = sr.AudioData(audio_int16.tobytes(), self._sample_rate, 2)
+            text = self.recognizer.recognize_google(audio, language='zh-CN')
+            logger.info(f"语音识别: {text}")
+            return text
+
+        except Exception as e:
+            logger.error(f"语音识别失败: {e}")
+            return None
 
     def speak(self, text: str):
-        """TTS朗读回复"""
+        """TTS朗读文字"""
         if not self.tts_engine:
-            logger.info(f"[TTS待实现] 朗读: {text[:50]}...")
+            logger.info(f"[TTS未安装] 朗读: {text[:50]}...")
             return
-        # 实际实现
-        # self.tts_engine.synthesize(text)
-        # self.tts_engine.play()
+        try:
+            # 在子线程中执行避免阻塞UI
+            def _say():
+                self.tts_engine.say(text)
+                self.tts_engine.runAndWait()
+            t = threading.Thread(target=_say, daemon=True)
+            t.start()
+        except Exception as e:
+            logger.error(f"TTS朗读失败: {e}")
 
     def start_continuous_listen(self, callback):
-        """
-        持续监听循环（后台线程）
-        callback: 收到文字后的处理函数 callback(text: str)
-        """
-        import threading
+        """持续监听循环（后台线程）"""
         def _loop():
             while self.is_listening:
-                text = self.listen()
+                text = self.listen_once(timeout=3.0)
                 if text:
-                    logger.info(f"语音识别结果: {text}")
+                    logger.info(f"语音输入: {text}")
                     try:
                         callback(text)
                     except Exception as e:
@@ -91,4 +154,14 @@ class VoiceModule:
         t.start()
 
     def stop(self):
+        """停止持续监听"""
         self.is_listening = False
+
+    def cleanup(self):
+        """清理资源"""
+        self.stop()
+        if self.tts_engine:
+            try:
+                self.tts_engine.stop()
+            except Exception:
+                pass

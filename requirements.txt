@@ -17,9 +17,11 @@ pandas>=2.2.3
 # 嵌入模型（本地Embedding，如需中文Embedding可安装 sentence-transformers）
 # sentence-transformers>=3.3.1
 
-# 语音识别（可选，需要时再安装）
-# SpeechRecognition>=3.10.4
-# pyaudio>=0.2.14
+# 语音识别
+sounddevice>=0.5.1
+SpeechRecognition>=3.10.4
+# TTS朗读（离线）
+pyttsx3>=2.90
 
 # 工具
 requests>=2.32.4

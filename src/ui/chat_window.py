@@ -24,6 +24,7 @@ from config.settings import (
 from src.ollama_client import OllamaClient, test_connection
 from src.ollama_client.knowledge_agent import execute_knowledge_query
 from src.ui.tray_manager import TrayManager
+from src.voice.voice_module import VoiceModule
 
 
 def _get_font(size=10, bold=False):
@@ -157,9 +158,24 @@ class ChatWindow(QMainWindow):
         self.ollama_client = OllamaClient()
         self._msg_count = 0          # 消息计数器（防失忆）
         self.tray = None             # 托盘，稍后初始化
+        self.voice = None            # 语音模块，稍后初始化
         self._init_ui()
         self._init_ollama()
+        self._init_voice()
         self.tray = TrayManager(self)  # 必须在UI初始化之后
+
+    def _init_voice(self):
+        """初始化语音模块"""
+        try:
+            self.voice = VoiceModule()
+            ok = self.voice.initialize()
+            if ok:
+                logger.info("语音模块就绪")
+            else:
+                logger.warning("语音模块初始化失败")
+        except Exception as e:
+            logger.warning(f"语音模块不可用: {e}")
+            self.voice = None
 
     def closeEvent(self, event):
         """关闭窗口时最小化到托盘"""
@@ -423,21 +439,38 @@ class ChatWindow(QMainWindow):
 
     def _on_voice_input_toggle(self, checked):
         """切换语音输入"""
+        if not self.voice:
+            self._add_system_message("⚠️ 语音模块未初始化，请先安装依赖")
+            self.voice_input_btn.setChecked(False)
+            return
         if checked:
             self.voice_input_btn.setStyleSheet(self._btn_style("#07C160"))
-            self.voice_input_btn.setText("🎤 语音输入中")
-            self._add_system_message("🎤 语音输入已开启（需要安装声卡驱动）")
+            self.voice_input_btn.setText("🎤 聆听中...")
+            self._add_system_message("🎤 语音输入已开启，请说话...")
+            # 启动持续监听
+            self.voice.start_continuous_listen(self._on_voice_input)
         else:
             self.voice_input_btn.setStyleSheet(self._btn_style("#888888"))
             self.voice_input_btn.setText("🎤 语音输入")
+            if self.voice:
+                self.voice.stop()
             self._add_system_message("🎤 语音输入已关闭")
+
+    def _on_voice_input(self, text: str):
+        """收到语音输入的文字"""
+        if text:
+            self._send(text)
 
     def _on_voice_output_toggle(self, checked):
         """切换语音朗读"""
+        if not self.voice or not hasattr(self.voice, 'tts_engine') or not self.voice.tts_engine:
+            self._add_system_message("⚠️ 语音朗读未安装，请先: pip install pyttsx3")
+            self.voice_output_btn.setChecked(False)
+            return
         if checked:
             self.voice_output_btn.setStyleSheet(self._btn_style("#07C160"))
-            self.voice_output_btn.setText("🔊 语音朗读中")
-            self._add_system_message("🔊 语音朗读已开启（需要安装TTS引擎）")
+            self.voice_output_btn.setText("🔊 朗读中")
+            self._add_system_message("🔊 语音朗读已开启")
         else:
             self.voice_output_btn.setStyleSheet(self._btn_style("#888888"))
             self.voice_output_btn.setText("🔊 语音朗读")
@@ -478,10 +511,18 @@ class ChatWindow(QMainWindow):
         self._remove_thinking_bubble()
         reply = result.get("reply", "小智出错了~")
         self._add_bubble(reply, is_user=False)
+        # 语音朗读回复
+        if self.voice_output_btn.isChecked() and self.voice:
+            # 去掉 [IMG:] 标签再朗读
+            import re
+            clean = re.sub(r'\[IMG:[^\]]+\]', '', reply)
+            self.voice.speak(clean)
 
     def _on_query_error(self, err_msg: str):
         self._remove_thinking_bubble()
         self._add_bubble(f"⚠️ 查询出错: {err_msg}", is_user=False)
+        if self.voice_output_btn.isChecked() and self.voice:
+            self.voice.speak("查询出错了")
 
     def _clear_chat(self):
         reply = QMessageBox.question(self, "清空对话", "确定要清空所有聊天记录吗？")

@@ -49,10 +49,10 @@ USER_BUBBLE = "#95EC69"
 BOT_BUBBLE = "#FFFFFF"
 FONT_FAMILY = "微软雅黑"
 
-# ======================== 语音模块（可选）========================
-VOICE_ENABLED = False           # 设为 True 启用语音
+# ======================== 语音模块 ========================
+VOICE_ENABLED = True            # 启用语音
 VOICE_WAKE_WORD = "小智"
-VOICE_ASR_MODEL = "whisper"    # 预留，未来接入
+VOICE_ASR_MODEL = "whisper"    # 预留
 VOICE_INPUT_ENABLED = False     # 语音输入开关（运行时切换）
 VOICE_OUTPUT_ENABLED = False    # 语音朗读开关（运行时切换）
 
