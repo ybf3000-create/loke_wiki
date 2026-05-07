@@ -53,3 +53,39 @@ FONT_FAMILY = "微软雅黑"
 VOICE_ENABLED = False           # 设为 True 启用语音
 VOICE_WAKE_WORD = "小智"
 VOICE_ASR_MODEL = "whisper"    # 预留，未来接入
+VOICE_INPUT_ENABLED = False     # 语音输入开关（运行时切换）
+VOICE_OUTPUT_ENABLED = False    # 语音朗读开关（运行时切换）
+
+# ======================== AI规则文件 ========================
+AI_RULES_PATH = BASE_DIR / "config" / "ai_rules.txt"
+AI_LAST_MODEL_PATH = BASE_DIR / "config" / ".last_model"
+MSG_REMIND_INTERVAL = 50        # 每 N 条消息重发一次系统规则
+
+
+# ======================== 工具函数 ========================
+
+def load_ai_rules() -> str:
+    """读取 ai_rules.txt 中的用户自定义规则"""
+    if AI_RULES_PATH.exists():
+        return AI_RULES_PATH.read_text(encoding="utf-8")
+    return ""
+
+
+def build_system_prompt(rules_text: str = "") -> str:
+    """构建完整的 System Prompt"""
+    base = SYSTEM_PROMPT
+    if rules_text.strip():
+        base += f"\n\n【用户自定义规则】\n{rules_text.strip()}"
+    return base
+
+
+def load_last_model() -> str:
+    """读取上次选择的模型"""
+    if AI_LAST_MODEL_PATH.exists():
+        return AI_LAST_MODEL_PATH.read_text(encoding="utf-8").strip()
+    return OLLAMA_MODEL
+
+
+def save_last_model(model_name: str):
+    """保存本次选择的模型"""
+    AI_LAST_MODEL_PATH.write_text(model_name.strip(), encoding="utf-8")

@@ -19,10 +19,11 @@ from loguru import logger
 from config.settings import (
     APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, THEME_COLOR,
     BG_COLOR, USER_BUBBLE, BOT_BUBBLE, CHAT_BG, FONT_FAMILY,
-    IMAGES_DIR, VOICE_ENABLED,
+    IMAGES_DIR, VOICE_ENABLED, MSG_REMIND_INTERVAL,
 )
 from src.ollama_client import OllamaClient, test_connection
 from src.ollama_client.knowledge_agent import execute_knowledge_query
+from src.ui.tray_manager import TrayManager
 
 
 def _get_font(size=10, bold=False):
@@ -154,8 +155,18 @@ class ChatWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.ollama_client = OllamaClient()
+        self._msg_count = 0          # 消息计数器（防失忆）
+        self.tray = None             # 托盘，稍后初始化
         self._init_ui()
         self._init_ollama()
+        self.tray = TrayManager(self)  # 必须在UI初始化之后
+
+    def closeEvent(self, event):
+        """关闭窗口时最小化到托盘"""
+        event.ignore()
+        self.hide()
+        if self.tray and self.tray.tray:
+            self.tray.tray.showMessage("洛克王国小智", "程序已最小化到托盘", QIcon(), 2000)
 
     def _init_ui(self):
         self.setWindowTitle(APP_NAME)
@@ -271,12 +282,23 @@ class ChatWindow(QMainWindow):
         self.clear_btn.clicked.connect(self._clear_chat)
 
         btn_row.addWidget(self.toggle_ollama_btn)
-        if VOICE_ENABLED:
-            self.voice_btn = QPushButton("🎤 语音输入")
-            self.voice_btn.setFont(_get_font(9))
-            self.voice_btn.setStyleSheet(self._btn_style("#07C160"))
-            self.voice_btn.clicked.connect(self._on_voice_click)
-            btn_row.addWidget(self.voice_btn)
+
+        # 语音输入按钮（始终显示，可开关）
+        self.voice_input_btn = QPushButton("🎤 语音输入")
+        self.voice_input_btn.setCheckable(True)
+        self.voice_input_btn.setFont(_get_font(9))
+        self.voice_input_btn.setStyleSheet(self._btn_style("#888888"))
+        self.voice_input_btn.clicked.connect(self._on_voice_input_toggle)
+        btn_row.addWidget(self.voice_input_btn)
+
+        # 语音朗读按钮
+        self.voice_output_btn = QPushButton("🔊 语音朗读")
+        self.voice_output_btn.setCheckable(True)
+        self.voice_output_btn.setFont(_get_font(9))
+        self.voice_output_btn.setStyleSheet(self._btn_style("#888888"))
+        self.voice_output_btn.clicked.connect(self._on_voice_output_toggle)
+        btn_row.addWidget(self.voice_output_btn)
+
         btn_row.addStretch()
         btn_row.addWidget(self.clear_btn)
 
@@ -385,14 +407,56 @@ class ChatWindow(QMainWindow):
         try:
             self.ollama_client.change_model(model_name)
             self._add_system_message(f"模型已切换为: {model_name}")
+            # 同步托盘菜单
+            if self.tray:
+                self.tray.update_model_menu()
         except ValueError as e:
             QMessageBox.warning(self, "切换失败", str(e))
+
+    def _refresh_model_combo(self):
+        """刷新顶部栏模型选择（从托盘切换后调用）"""
+        self.model_combo.blockSignals(True)
+        idx = self.model_combo.findText(self.ollama_client.model)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+        self.model_combo.blockSignals(False)
+
+    def _on_voice_input_toggle(self, checked):
+        """切换语音输入"""
+        if checked:
+            self.voice_input_btn.setStyleSheet(self._btn_style("#07C160"))
+            self.voice_input_btn.setText("🎤 语音输入中")
+            self._add_system_message("🎤 语音输入已开启（需要安装声卡驱动）")
+        else:
+            self.voice_input_btn.setStyleSheet(self._btn_style("#888888"))
+            self.voice_input_btn.setText("🎤 语音输入")
+            self._add_system_message("🎤 语音输入已关闭")
+
+    def _on_voice_output_toggle(self, checked):
+        """切换语音朗读"""
+        if checked:
+            self.voice_output_btn.setStyleSheet(self._btn_style("#07C160"))
+            self.voice_output_btn.setText("🔊 语音朗读中")
+            self._add_system_message("🔊 语音朗读已开启（需要安装TTS引擎）")
+        else:
+            self.voice_output_btn.setStyleSheet(self._btn_style("#888888"))
+            self.voice_output_btn.setText("🔊 语音朗读")
+            self._add_system_message("🔊 语音朗读已关闭")
 
     def _on_send_click(self):
         text = self.input_edit.toPlainText().strip()
         if not text:
             return
         self.input_edit.clear()
+
+        # 消息计数器 + 防失忆
+        self._msg_count += 1
+        if self._msg_count >= MSG_REMIND_INTERVAL:
+            self._msg_count = 0
+            self._add_system_message("🔄 系统规则刷新中...")
+            if self.toggle_ollama_btn.isChecked():
+                self.ollama_client.send_reminder()
+
         self._send(text)
 
     def _send(self, text: str):
@@ -426,10 +490,6 @@ class ChatWindow(QMainWindow):
                 item = self.chat_layout.takeAt(0)
                 if item and item.widget():
                     item.widget().deleteLater()
-
-    def _on_voice_click(self):
-        # 预留语音接口
-        self._add_system_message("🎤 语音功能正在开发中...")
 
     # ======================== 气泡管理 ========================
 

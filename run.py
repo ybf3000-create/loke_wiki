@@ -32,6 +32,14 @@ def main():
     from src.core.database import init_db
     init_db()
 
+    # 加载AI规则
+    from config.settings import load_ai_rules
+    rules = load_ai_rules()
+    if rules:
+        logger.info(f"已加载用户AI规则 ({len(rules)}字符)")
+    else:
+        logger.info("未找到用户自定义AI规则，使用默认规则")
+
     # 测试 Ollama 连接
     from src.ollama_client import test_connection
     ok, msg = test_connection()
@@ -47,7 +55,6 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    # 设置应用级属性，确保中文正常
     app.setStyleSheet("QToolTip { font-family: 微软雅黑; }")
 
     win = ChatWindow()
