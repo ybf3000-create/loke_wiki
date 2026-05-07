@@ -89,3 +89,24 @@ def load_last_model() -> str:
 def save_last_model(model_name: str):
     """保存本次选择的模型"""
     AI_LAST_MODEL_PATH.write_text(model_name.strip(), encoding="utf-8")
+
+
+# ======================== TTS引擎配置 ========================
+AI_TTS_ENGINE_PATH = BASE_DIR / "config" / ".tts_engine"
+
+TTS_ENGINE_NAMES = {
+    "microsoft": "微软TTS (pyttsx3)",
+    "moss": "MOSS-TTS-Nano",
+}
+
+
+def load_tts_engine() -> str:
+    """读取上次选择的TTS引擎"""
+    if AI_TTS_ENGINE_PATH.exists():
+        return AI_TTS_ENGINE_PATH.read_text(encoding="utf-8").strip()
+    return "microsoft"  # 默认微软TTS
+
+
+def save_tts_engine(engine_key: str):
+    """保存TTS引擎选择"""
+    AI_TTS_ENGINE_PATH.write_text(engine_key.strip(), encoding="utf-8")

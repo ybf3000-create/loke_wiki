@@ -12,7 +12,8 @@ from PyQt6.QtWidgets import (
 )
 from loguru import logger
 
-from config.settings import AI_RULES_PATH, IMAGES_DIR
+from config.settings import AI_RULES_PATH, IMAGES_DIR, AI_LAST_MODEL_PATH
+from config.settings import load_last_model, save_last_model, load_tts_engine, save_tts_engine
 
 
 class TrayManager:
@@ -63,6 +64,10 @@ class TrayManager:
         self.voice_output_action.triggered.connect(self._toggle_voice_output)
         menu.addAction(self.voice_output_action)
 
+        # --- TTS引擎选择 ---
+        self.tts_menu = menu.addMenu("🗣 TTS引擎")
+        self._populate_tts_menu()
+
         menu.addSeparator()
 
         # --- 退出 ---
@@ -106,6 +111,33 @@ class TrayManager:
                     self.model_menu.addAction(action)
         except Exception as e:
             logger.warning(f"模型列表加载失败: {e}")
+
+    def _populate_tts_menu(self):
+        """填充TTS引擎列表"""
+        self.tts_menu.clear()
+        current = load_tts_engine()
+        engines = [
+            ("microsoft", "微软TTS (pyttsx3)"),
+            ("moss", "MOSS-TTS-Nano (需下载模型)"),
+        ]
+        for key, label in engines:
+            action = QAction(label)
+            action.setCheckable(True)
+            action.setChecked(key == current)
+            action.triggered.connect(lambda checked, k=key: self._switch_tts(k))
+            self.tts_menu.addAction(action)
+
+    def _switch_tts(self, engine_key: str):
+        """切换TTS引擎"""
+        save_tts_engine(engine_key)
+        for action in self.tts_menu.actions():
+            action.setChecked(action.text().startswith(
+                "微软" if engine_key == "microsoft" else "MOSS"
+            ))
+        # 通知父窗口
+        if hasattr(self.parent, 'voice') and self.parent.voice:
+            self.parent.voice.switch_tts(engine_key)
+        logger.info(f"TTS引擎切换为: {engine_key}")
 
     def _toggle_window(self):
         """显示/隐藏主窗口"""
