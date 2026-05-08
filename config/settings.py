@@ -110,3 +110,19 @@ def load_tts_engine() -> str:
 def save_tts_engine(engine_key: str):
     """保存TTS引擎选择"""
     AI_TTS_ENGINE_PATH.write_text(engine_key.strip(), encoding="utf-8")
+
+
+# MOSS-TTS-Nano 执行后端
+AI_MOSS_PROVIDER_PATH = BASE_DIR / "config" / ".moss_provider"
+
+
+def load_moss_provider() -> str:
+    """读取MOSS-TTS-Nano的ONNX执行后端 (cpu / cuda)"""
+    if AI_MOSS_PROVIDER_PATH.exists():
+        return AI_MOSS_PROVIDER_PATH.read_text(encoding="utf-8").strip()
+    return "cpu"  # 默认CPU
+
+
+def save_moss_provider(provider: str):
+    """保存MOSS执行后端(cpu/cuda)"""
+    AI_MOSS_PROVIDER_PATH.write_text(provider.strip(), encoding="utf-8")

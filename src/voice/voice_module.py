@@ -9,7 +9,7 @@ import numpy as np
 from pathlib import Path
 from loguru import logger
 
-from config.settings import VOICE_WAKE_WORD, load_tts_engine
+from config.settings import VOICE_WAKE_WORD, load_tts_engine, load_moss_provider
 
 
 class VoiceModule:
@@ -199,40 +199,43 @@ class VoiceModule:
             logger.error(f"微软TTS失败: {e}")
 
     def _speak_moss(self, text: str):
-        """MOSS-TTS-Nano朗读"""
+        """MOSS-TTS-Nano朗读（支持CPU/GPU切换）"""
         try:
-            # 用子进程调用MOSS CLI生成音频并播放
             moss_dir = Path("MOSS-TTS-Nano")
             if not moss_dir.exists():
-                logger.warning("MOSS-TTS-Nano 目录不存在")
-                self._speak_microsoft(text)  # fallback
+                logger.warning("MOSS-TTS-Nano 目录不存在，请运行:\n"
+                               "  git clone https://github.com/OpenMOSS/MOSS-TTS-Nano.git\n"
+                               "  cd MOSS-TTS-Nano && pip install -r requirements.txt && pip install -e .")
+                self._speak_microsoft(text)
                 return
 
-            # MOSS需要参考音频，使用内置的
             prompt_wav = str(moss_dir / "assets" / "audio" / "zh_1.wav")
             if not Path(prompt_wav).exists():
                 logger.warning("MOSS参考音频不存在")
                 self._speak_microsoft(text)
                 return
 
+            # 读取执行后端配置（cpu / cuda）
+            provider = load_moss_provider()
+            exec_arg = [] if provider == "cpu" else ["--execution-provider", "cuda"]
+
             def _run_moss():
                 try:
                     result = subprocess.run(
                         [sys.executable, "infer_onnx.py",
                          "--prompt-audio-path", prompt_wav,
-                         "--text", text],
+                         "--text", text] + exec_arg,
                         cwd=str(moss_dir),
                         capture_output=True, text=True, timeout=60
                     )
                     if result.returncode == 0:
-                        # 播放生成的音频
                         from playsound import playsound
                         out_wav = moss_dir / "generated_audio" / "infer_output.wav"
                         if out_wav.exists():
                             playsound(str(out_wav))
                     else:
                         logger.error(f"MOSS失败: {result.stderr[:200]}")
-                        self._speak_microsoft(text)  # fallback
+                        self._speak_microsoft(text)
                 except Exception as e:
                     logger.error(f"MOSS异常: {e}")
                     self._speak_microsoft(text)
@@ -241,6 +244,7 @@ class VoiceModule:
             t.start()
         except Exception as e:
             logger.error(f"MOSS朗读失败: {e}")
+            self._speak_microsoft(text)
 
     def cleanup(self):
         """清理资源"""

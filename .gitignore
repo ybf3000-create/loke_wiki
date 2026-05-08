@@ -12,3 +12,11 @@ data/images/*
 *.egg-info/
 .DS_Store
 Thumbs.db
+
+# MOSS-TTS-Nano (too large, clone separately)
+MOSS-TTS-Nano/
+
+# Preference files
+config/.last_model
+config/.tts_engine
+config/.moss_provider

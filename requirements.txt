@@ -22,6 +22,8 @@ sounddevice>=0.5.1
 SpeechRecognition>=3.10.4
 # TTS朗读（离线）
 pyttsx3>=2.90
+# ONNX运行时（MOSS-TTS-Nano依赖）
+onnxruntime>=1.20.0
 
 # 工具
 requests>=2.32.4

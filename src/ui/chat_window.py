@@ -260,6 +260,26 @@ class ChatWindow(QMainWindow):
         bar_layout.addWidget(self.model_combo)
         bar_layout.addSpacing(12)
         bar_layout.addWidget(self.status_label)
+        bar_layout.addSpacing(12)
+
+        # 退出按钮
+        exit_btn = QPushButton("❌")
+        exit_btn.setFixedSize(32, 32)
+        exit_btn.setFont(_get_font(14))
+        exit_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: white;
+                border: none;
+                border-radius: 16px;
+            }
+            QPushButton:hover {
+                background: rgba(255,255,255,0.3);
+            }
+        """)
+        exit_btn.setToolTip("退出程序")
+        exit_btn.clicked.connect(self._exit_app)
+        bar_layout.addWidget(exit_btn)
 
         parent_layout.addWidget(bar)
 
@@ -539,6 +559,13 @@ class ChatWindow(QMainWindow):
                 item = self.chat_layout.takeAt(0)
                 if item and item.widget():
                     item.widget().deleteLater()
+
+    def _exit_app(self):
+        """退出程序（带确认）"""
+        if self.tray:
+            self.tray._quit_app()
+        else:
+            QApplication.quit()
 
     # ======================== 气泡管理 ========================
 
