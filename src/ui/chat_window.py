@@ -359,6 +359,7 @@ class ChatWindow(QMainWindow):
         self.input_edit.setStyleSheet("""
             QTextEdit {
                 background: white;
+                color: #333333;
                 border: 1px solid #D5D5D5;
                 border-radius: 8px;
                 padding: 8px;
