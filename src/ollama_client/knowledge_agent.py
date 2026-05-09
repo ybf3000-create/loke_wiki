@@ -143,7 +143,6 @@ def execute_knowledge_query(text: str) -> dict:
             reply = "找到以下蛋：\n" + "\n".join(lines)
             return {"type": "egg_list", "data": eggs, "reply": reply}
         # 如果是进化形态没有蛋，提示基础形态
-        from src.core.database import query_spirit
         spirit = query_spirit(keyword.strip())
         if spirit:
             # 模糊搜索蛋表，找最接近的蛋

@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 from loguru import logger
 
-from config.settings import AI_RULES_PATH, IMAGES_DIR, AI_LAST_MODEL_PATH
+from config.settings import AI_RULES_PATH, AI_RULES_DOC_PATH, IMAGES_DIR, AI_LAST_MODEL_PATH
 from config.settings import load_last_model, save_last_model, load_tts_engine, save_tts_engine, load_moss_provider, save_moss_provider
 
 
@@ -32,6 +32,26 @@ class TrayManager:
 
         # 右键菜单
         menu = QMenu()
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #FFFFFF;
+                color: #222222;
+                border: 1px solid #D5D5D5;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 24px;
+                background: transparent;
+            }
+            QMenu::item:selected {
+                background-color: #07C160;
+                color: white;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #E5E5E5;
+                margin: 4px 8px;
+            }
+        """)
 
         # --- 显示/隐藏 ---
         self.show_action = QAction("📱 显示/隐藏窗口")
@@ -45,8 +65,34 @@ class TrayManager:
         edit_rules_action.triggered.connect(self._edit_ai_rules)
         menu.addAction(edit_rules_action)
 
+        # --- 查看AI规则说明 ---
+        rules_doc_action = QAction("📖 AI规则说明")
+        rules_doc_action.triggered.connect(self._open_ai_rules_doc)
+        menu.addAction(rules_doc_action)
+
         # --- 切换AI模型 ---
         self.model_menu = menu.addMenu("🤖 切换AI模型")
+        self.model_menu.setStyleSheet("""
+            QMenu {
+                background-color: #FFFFFF;
+                color: #222222;
+                border: 1px solid #D5D5D5;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 24px;
+                background: transparent;
+                color: #222222;
+            }
+            QMenu::item:selected {
+                background-color: #07C160;
+                color: white;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #E5E5E5;
+                margin: 4px 8px;
+            }
+        """)
         self._populate_model_menu()
 
         menu.addSeparator()
@@ -66,6 +112,27 @@ class TrayManager:
 
         # --- TTS引擎选择 ---
         self.tts_menu = menu.addMenu("🗣 TTS引擎")
+        self.tts_menu.setStyleSheet("""
+            QMenu {
+                background-color: #FFFFFF;
+                color: #222222;
+                border: 1px solid #D5D5D5;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 24px;
+                background: transparent;
+                color: #222222;
+            }
+            QMenu::item:selected {
+                background-color: #07C160;
+                color: white;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #E5E5E5;
+                margin: 4px 8px;
+            }
+        """)
         self._populate_tts_menu()
 
         menu.addSeparator()
@@ -208,6 +275,20 @@ class TrayManager:
         except Exception as e:
             logger.error(f"打开规则文件失败: {e}")
             QMessageBox.warning(self.parent, "提示", f"无法打开规则文件，请手动编辑:\n{AI_RULES_PATH}")
+
+    def _open_ai_rules_doc(self):
+        """用系统文本编辑器打开AI规则说明文档"""
+        if not AI_RULES_DOC_PATH.exists():
+            QMessageBox.warning(self.parent, "提示", f"说明文档不存在: {AI_RULES_DOC_PATH}")
+            return
+        try:
+            if os.name == 'nt':  # Windows
+                os.startfile(str(AI_RULES_DOC_PATH))
+            else:
+                subprocess.run(['xdg-open', str(AI_RULES_DOC_PATH)], check=False)
+        except Exception as e:
+            logger.error(f"打开规则说明文档失败: {e}")
+            QMessageBox.warning(self.parent, "提示", f"无法打开说明文档:\n{AI_RULES_DOC_PATH}")
 
     def _switch_model(self, model_name: str):
         """切换AI模型"""

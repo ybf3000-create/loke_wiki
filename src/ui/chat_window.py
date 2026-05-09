@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QPushButton, QLabel, QScrollArea, QFrame,
     QSizePolicy, QToolButton, QListWidget, QListWidgetItem,
-    QMessageBox, QComboBox, QLineEdit, QSplitter, QSlider,
+    QMessageBox, QComboBox, QLineEdit, QSplitter, QSlider, QListView,
 )
 from loguru import logger
 
@@ -20,9 +20,11 @@ from config.settings import (
     APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, THEME_COLOR,
     BG_COLOR, USER_BUBBLE, BOT_BUBBLE, CHAT_BG, FONT_FAMILY,
     IMAGES_DIR, VOICE_ENABLED, MSG_REMIND_INTERVAL,
+    AI_RULES_DOC_PATH,
 )
 from src.ollama_client import OllamaClient, test_connection
 from src.ollama_client.knowledge_agent import execute_knowledge_query
+from src.ollama_client.agent_loop import run_agent_loop
 from src.ui.tray_manager import TrayManager
 from src.voice.voice_module import VoiceModule
 from src.check_deps import check_and_install
@@ -30,6 +32,21 @@ from src.check_deps import check_and_install
 
 def _get_font(size=10, bold=False):
     return QFont(FONT_FAMILY if FONT_FAMILY in QFont().families() else "Microsoft YaHei", size, QFont.Weight.Bold if bold else QFont.Weight.Normal)
+
+
+class ChatInputEdit(QTextEdit):
+    """支持 Enter 发送、Shift+Enter 换行的输入框"""
+
+    send_requested = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)
+            else:
+                self.send_requested.emit()
+            return
+        super().keyPressEvent(event)
 
 
 # ======================== 气泡组件 ========================
@@ -133,21 +150,44 @@ class QueryWorker(QThread):
 
     def run(self):
         try:
-            if self.use_ollama and self.ollama_client:
-                # 先查询本地知识库，再传给 Ollama 整理输出
-                kq = execute_knowledge_query(self.text)
-                # 如果 Ollama 可用，让 Ollama 用更自然的语言回复
-                if kq["type"] != "not_found":
-                    context = kq["reply"]
-                    prompt = f"用户问：{self.text}\n\n知识库查询结果：\n{context}\n\n请用自然语言回复用户，引用知识库数据即可，不要额外发挥。"
-                    reply = self.ollama_client.chat(prompt)
-                    kq["reply"] = reply
-                self.finished.emit(kq)
-            else:
-                result = execute_knowledge_query(self.text)
-                self.finished.emit(result)
+            # 1. 查知识库（无论是否用 Ollama，都先查）
+            kq = execute_knowledge_query(self.text)
         except Exception as e:
-            logger.exception(e)
+            logger.exception(f"知识库查询失败: {e}")
+            kq = {"type": "error", "reply": f"⚠️ 知识库查询出错: {e}"}
+
+        # 2. 尝试用 Ollama 润色（可选）
+        if self.use_ollama and self.ollama_client and kq.get("type") not in ("not_found", "error"):
+            try:
+                context = kq["reply"]
+                prompt = (
+                    f"用户问：{self.text}\n\n知识库查询结果：\n{context}\n\n"
+                    f"请用自然语言回复用户，引用知识库数据即可，不要额外发挥。"
+                )
+                reply = self.ollama_client.chat(prompt)
+                kq["reply"] = reply
+            except Exception as e:
+                logger.warning(f"Ollama 润色失败，回退到知识库原始结果: {e}")
+
+        self.finished.emit(kq)
+
+
+class AgentWorker(QThread):
+    """AI Agent 全权代理工作线程"""
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, text: str, ollama_client: OllamaClient = None):
+        super().__init__()
+        self.text = text
+        self.ollama_client = ollama_client
+
+    def run(self):
+        try:
+            reply = run_agent_loop(self.text, self.ollama_client)
+            self.finished.emit({"type": "agent", "reply": reply or "小智暂时无法回答这个问题~"})
+        except Exception as e:
+            logger.exception(f"Agent 查询失败: {e}")
             self.error.emit(str(e))
 
 
@@ -231,21 +271,71 @@ class ChatWindow(QMainWindow):
 
         # 模型选择
         self.model_combo = QComboBox()
+        self.model_combo.setView(QListView())
+        self.model_combo.view().setStyleSheet("""
+            QListView {
+                background-color: #FFFFFF;
+                color: #111111;
+                border: 1px solid #D5D5D5;
+                outline: 0;
+                selection-background-color: #07C160;
+                selection-color: #FFFFFF;
+            }
+            QListView::item {
+                min-height: 26px;
+                padding: 4px 8px;
+                color: #111111;
+                background-color: #FFFFFF;
+            }
+            QListView::item:selected,
+            QListView::item:hover {
+                color: #FFFFFF;
+                background-color: #07C160;
+            }
+        """)
         self.model_combo.setFont(_get_font(9))
         self.model_combo.setStyleSheet("""
             QComboBox {
-                background: rgba(255,255,255,0.2);
-                color: white;
+                background-color: #FFFFFF;
+                color: #111111;
+                border: 1px solid rgba(255,255,255,0.75);
                 border-radius: 4px;
-                padding: 4px 8px;
-                min-width: 180px;
+                padding: 4px 24px 4px 8px;
+                min-width: 220px;
             }
-            QComboBox::drop-down { border: none; }
+            QComboBox:hover {
+                border: 1px solid #FFFFFF;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 22px;
+                border-left: 1px solid #D5D5D5;
+                background-color: #F5F5F5;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 0;
+                height: 0;
+            }
             QComboBox QAbstractItemView {
-                background: white;
-                color: black;
+                background-color: #FFFFFF;
+                color: #111111;
                 selection-background-color: #07C160;
-                selection-color: white;
+                selection-color: #FFFFFF;
+                border: 1px solid #D5D5D5;
+                outline: 0;
+            }
+            QComboBox QAbstractItemView::item {
+                color: #111111;
+                background-color: #FFFFFF;
+                min-height: 26px;
+                padding: 4px 8px;
+            }
+            QComboBox QAbstractItemView::item:selected,
+            QComboBox QAbstractItemView::item:hover {
+                color: #FFFFFF;
+                background-color: #07C160;
             }
         """)
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
@@ -343,6 +433,13 @@ class ChatWindow(QMainWindow):
         self.voice_output_btn.clicked.connect(self._on_voice_output_toggle)
         btn_row.addWidget(self.voice_output_btn)
 
+        # AI规则说明按钮
+        self.rules_doc_btn = QPushButton("📖 AI规则")
+        self.rules_doc_btn.setFont(_get_font(9))
+        self.rules_doc_btn.setStyleSheet(self._btn_style("#888888"))
+        self.rules_doc_btn.clicked.connect(self._open_ai_rules_doc)
+        btn_row.addWidget(self.rules_doc_btn)
+
         btn_row.addStretch()
         btn_row.addWidget(self.clear_btn)
 
@@ -352,7 +449,7 @@ class ChatWindow(QMainWindow):
         edit_row = QHBoxLayout()
         edit_row.setSpacing(8)
 
-        self.input_edit = QTextEdit()
+        self.input_edit = ChatInputEdit()
         self.input_edit.setPlaceholderText("输入问题，如：查询火神技能、水系精灵有哪些、火系克制草系...")
         self.input_edit.setFont(_get_font(10))
         self.input_edit.setFixedHeight(48)
@@ -367,9 +464,7 @@ class ChatWindow(QMainWindow):
             }
         """)
         self.input_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        # Ctrl+Enter 发送
-        shortcut = None  # will handle via keypress
+        self.input_edit.send_requested.connect(self._on_send_click)
 
         send_btn = QPushButton("发送")
         send_btn.setFont(_get_font(11, True))
@@ -473,11 +568,16 @@ class ChatWindow(QMainWindow):
             self.voice_input_btn.setChecked(False)
             return
         if checked:
+            started = self.voice.start_continuous_listen(self._on_voice_input)
+            if not started:
+                self.voice_input_btn.setStyleSheet(self._btn_style("#888888"))
+                self.voice_input_btn.setText("🎤 语音输入")
+                self.voice_input_btn.setChecked(False)
+                self._add_system_message(self.voice.last_error or "⚠️ 未找到可用麦克风，请检查系统输入设备")
+                return
             self.voice_input_btn.setStyleSheet(self._btn_style("#07C160"))
             self.voice_input_btn.setText("🎤 聆听中...")
             self._add_system_message("🎤 语音输入已开启，请说话...")
-            # 启动持续监听
-            self.voice.start_continuous_listen(self._on_voice_input)
         else:
             self.voice_input_btn.setStyleSheet(self._btn_style("#888888"))
             self.voice_input_btn.setText("🎤 语音输入")
@@ -492,7 +592,7 @@ class ChatWindow(QMainWindow):
 
     def _on_voice_output_toggle(self, checked):
         """切换语音朗读"""
-        if not self.voice or not hasattr(self.voice, 'tts_engine') or not self.voice.tts_engine:
+        if not self.voice or not getattr(self.voice, '_tts_engine', None):
             self._add_system_message("⚠️ 语音朗读未安装，请先: pip install pyttsx3")
             self.voice_output_btn.setChecked(False)
             return
@@ -526,11 +626,19 @@ class ChatWindow(QMainWindow):
         self._add_thinking_bubble()
         self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum())
 
-        worker = QueryWorker(
-            text=text,
-            use_ollama=self.toggle_ollama_btn.isChecked(),
-            ollama_client=self.ollama_client,
-        )
+        if self.toggle_ollama_btn.isChecked():
+            # AI 模式：使用 AgentWorker（AI 全权代理）
+            worker = AgentWorker(
+                text=text,
+                ollama_client=self.ollama_client,
+            )
+        else:
+            # 纯知识库模式：使用 QueryWorker（传统流程）
+            worker = QueryWorker(
+                text=text,
+                use_ollama=False,
+                ollama_client=self.ollama_client,
+            )
         worker.finished.connect(self._on_query_result)
         worker.error.connect(self._on_query_error)
         self._current_worker = worker
@@ -567,6 +675,21 @@ class ChatWindow(QMainWindow):
             self.tray._quit_app()
         else:
             QApplication.quit()
+
+    def _open_ai_rules_doc(self):
+        """用系统文本编辑器打开AI规则说明文档"""
+        if not AI_RULES_DOC_PATH.exists():
+            QMessageBox.warning(self, "提示", f"规则说明文档不存在: {AI_RULES_DOC_PATH}")
+            return
+        try:
+            if os.name == 'nt':  # Windows
+                os.startfile(str(AI_RULES_DOC_PATH))
+            else:
+                import subprocess
+                subprocess.run(['xdg-open', str(AI_RULES_DOC_PATH)], check=False)
+        except Exception as e:
+            logger.error(f"打开规则说明文档失败: {e}")
+            QMessageBox.warning(self, "提示", f"无法打开说明文档:\n{AI_RULES_DOC_PATH}")
 
     # ======================== 气泡管理 ========================
 

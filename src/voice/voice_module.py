@@ -29,6 +29,8 @@ class VoiceModule:
         self._tts_type = load_tts_engine()  # 当前TTS引擎类型
         self._audio_queue = queue.Queue()
         self._sample_rate = 16000
+        self._input_device = None
+        self.last_error = ""
 
     def initialize(self) -> bool:
         """初始化语音引擎"""
@@ -96,6 +98,63 @@ class VoiceModule:
 
     # ======================== 语音识别 ========================
 
+    def _get_input_device(self):
+        """获取可用麦克风设备索引；没有可用输入设备时返回 None"""
+        try:
+            import sounddevice as sd
+
+            def _validate_device(device_index):
+                if device_index is None or device_index < 0:
+                    return None
+                try:
+                    device_info = sd.query_devices(device_index)
+                    if device_info.get('max_input_channels', 0) <= 0:
+                        return None
+
+                    # 优先用设备默认采样率，避免固定 16000 在部分声卡上打开失败。
+                    sample_rate = int(device_info.get('default_samplerate') or self._sample_rate or 16000)
+                    sd.check_input_settings(
+                        device=device_index,
+                        channels=1,
+                        samplerate=sample_rate,
+                        dtype='float32',
+                    )
+                    return device_index, sample_rate, device_info.get('name', '')
+                except Exception as e:
+                    logger.debug(f"输入设备不可用: {device_index}, {e}")
+                    return None
+
+            default_device = sd.default.device
+            default_input = default_device[0] if isinstance(default_device, (list, tuple)) else default_device
+            validated = _validate_device(default_input)
+            if validated:
+                device_index, sample_rate, _ = validated
+                self._sample_rate = sample_rate
+                self.last_error = ""
+                return device_index
+
+            for idx, _device_info in enumerate(sd.query_devices()):
+                validated = _validate_device(idx)
+                if validated:
+                    device_index, sample_rate, device_name = validated
+                    self._sample_rate = sample_rate
+                    self.last_error = ""
+                    logger.warning(f"默认麦克风不可用，已改用输入设备: {device_index} {device_name}")
+                    return device_index
+        except Exception as e:
+            self.last_error = f"⚠️ 麦克风检测失败: {e}"
+            logger.error(self.last_error)
+            return None
+
+        self.last_error = "⚠️ 未找到可用麦克风，请检查系统输入设备；如果刚插入麦克风，请重启程序后再试"
+        logger.error(self.last_error)
+        return None
+
+    def has_input_device(self) -> bool:
+        """检查是否存在可用麦克风"""
+        self._input_device = self._get_input_device()
+        return self._input_device is not None
+
     def listen_once(self, timeout: float = 5.0) -> str | None:
         """
         录制一次语音并转为文字
@@ -108,6 +167,13 @@ class VoiceModule:
         try:
             import sounddevice as sd
 
+            device = self._input_device
+            if device is None:
+                device = self._get_input_device()
+                self._input_device = device
+            if device is None:
+                return None
+
             def callback(indata, frames, time_info, status):
                 if status:
                     logger.debug(f"录音状态: {status}")
@@ -118,6 +184,7 @@ class VoiceModule:
 
             with sd.InputStream(
                 samplerate=self._sample_rate,
+                device=device,
                 channels=1,
                 dtype='float32',
                 callback=callback
@@ -149,23 +216,43 @@ class VoiceModule:
             return text
 
         except Exception as e:
-            logger.error(f"语音识别失败: {e}")
+            self.last_error = f"⚠️ 语音识别失败: {e}"
+            logger.error(self.last_error)
+            if "Error querying device" in str(e):
+                self._input_device = None
             return None
 
-    def start_continuous_listen(self, callback):
+    def start_continuous_listen(self, callback) -> bool:
         """持续监听循环（后台线程）"""
+        if self.is_listening:
+            return True
+        if not self.has_input_device():
+            self.is_listening = False
+            return False
+
         def _loop():
+            failed_count = 0
             while self.is_listening:
                 text = self.listen_once(timeout=3.0)
                 if text:
+                    failed_count = 0
                     logger.info(f"语音输入: {text}")
                     try:
                         callback(text)
                     except Exception as e:
                         logger.error(f"语音回调出错: {e}")
+                elif self.last_error and ("麦克风" in self.last_error or "Error querying device" in self.last_error):
+                    failed_count += 1
+                    if failed_count >= 1:
+                        logger.error("语音输入设备不可用，已停止持续监听")
+                        self.stop()
+                        break
+
+        self.last_error = ""
         self.is_listening = True
         t = threading.Thread(target=_loop, daemon=True)
         t.start()
+        return True
 
     def stop(self):
         """停止持续监听"""
