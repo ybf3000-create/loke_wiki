@@ -262,6 +262,10 @@ def _fmt_spirit(data: dict | None) -> str:
         lines.append(f"属性：{' + '.join(types)}")
     if data.get('description'):
         lines.append(f"描述：{data['description']}")
+    if data.get('ability') and data.get('ability') != '无':
+        lines.append(f"特性：{data['ability']}")
+        if data.get('ability_effect') and data.get('ability_effect') != '无':
+            lines.append(f"特性效果：{data['ability_effect']}")
     if data.get('egg_group'):
         lines.append(f"蛋组：{data['egg_group']}")
     if data.get('evolution_chain'):

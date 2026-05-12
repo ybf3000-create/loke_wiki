@@ -32,10 +32,18 @@ def init_db():
                 description TEXT,
                 egg_group   TEXT,
                 evolution_chain TEXT,
+                ability     TEXT DEFAULT '',
+                ability_effect TEXT DEFAULT '',
                 image_path  TEXT,
                 created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 迁移：给已有数据添加 ability 列（如果不存在）
+        for col in ['ability', 'ability_effect']:
+            try:
+                conn.execute(f"ALTER TABLE spirits ADD COLUMN {col} TEXT DEFAULT ''")
+            except Exception:
+                pass  # 列已存在
         # 技能表
         conn.execute("""
             CREATE TABLE IF NOT EXISTS skills (
@@ -94,6 +102,28 @@ def init_db():
                 created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 精灵拼音索引表（用于语音输入同音字容错）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS spirit_pinyin (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                spirit_name     TEXT NOT NULL UNIQUE,
+                pinyin_full     TEXT NOT NULL,   -- 全拼(带声调)，如 "di mo"
+                pinyin_nos      TEXT NOT NULL,   -- 全拼(无声调)，如 "di mo"
+                pinyin_initials TEXT NOT NULL,   -- 首字母，如 "dm"
+                FOREIGN KEY (spirit_name) REFERENCES spirits(name)
+            )
+        """)
+        # 技能拼音索引表（用于语音输入同音字容错）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS skill_pinyin (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_name      TEXT NOT NULL UNIQUE,
+                pinyin_full     TEXT NOT NULL,   -- 全拼(带声调)
+                pinyin_nos      TEXT NOT NULL,   -- 全拼(无声调)
+                pinyin_initials TEXT NOT NULL,   -- 首字母
+                FOREIGN KEY (skill_name) REFERENCES skills(name)
+            )
+        """)
         logger.info("数据库初始化完成")
     conn.close()
 
@@ -101,12 +131,15 @@ def init_db():
 # ======================== 查询函数 ========================
 
 def query_spirit(name: str) -> dict | None:
-    """根据精灵名称查询完整信息"""
+    """根据精灵名称查询完整信息（含特性和技能），支持同音字容错"""
     conn = get_connection()
     try:
+        # 先用 resolve_spirit_name 处理同音字/拼音匹配
+        resolved = resolve_spirit_name(name)
+        if not resolved:
+            return None
         row = conn.execute(
-            "SELECT * FROM spirits WHERE name = ? OR name LIKE ?",
-            (name, f"%{name}%")
+            "SELECT * FROM spirits WHERE name = ?", (resolved,)
         ).fetchone()
         if row:
             data = dict(row)
@@ -120,6 +153,11 @@ def query_spirit(name: str) -> dict | None:
                 ORDER BY sk.learn_method, sk.learn_level
             """, (data["name"],)).fetchall()
             data["skills"] = [dict(s) for s in skills]
+            # 空值统一为"无"
+            if not data.get("ability"):
+                data["ability"] = "无"
+            if not data.get("ability_effect"):
+                data["ability_effect"] = "无"
             return data
         return None
     finally:
@@ -145,12 +183,14 @@ def query_spirit_list(type1: str = None, type2: str = None) -> list:
 
 
 def query_skill(name: str) -> dict | None:
-    """查询技能详情"""
+    """查询技能详情（支持同音字容错）"""
     conn = get_connection()
     try:
+        resolved = resolve_skill_name(name)
+        if not resolved:
+            return None
         row = conn.execute(
-            "SELECT * FROM skills WHERE name = ? OR name LIKE ?",
-            (name, f"%{name}%")
+            "SELECT * FROM skills WHERE name = ?", (resolved,)
         ).fetchone()
         return dict(row) if row else None
     finally:
@@ -246,7 +286,248 @@ def full_text_search(keyword: str, limit: int = 5) -> list:
     return results
 
 
+def update_spirit_ability(name: str, ability: str, ability_effect: str) -> bool:
+    """更新指定精灵的特性数据"""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE spirits SET ability=?, ability_effect=? WHERE name=?",
+            (ability, ability_effect, name)
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            # 尝试模糊匹配
+            cur = conn.execute(
+                "UPDATE spirits SET ability=?, ability_effect=? WHERE name LIKE ?",
+                (ability, ability_effect, f"%{name}%")
+            )
+            conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ======================== 拼音模糊匹配（语音输入容错） ========================
+
+_SPIRIT_PINYIN_CACHE: dict[str, dict] | None = None
+
+
+def _build_pinyin_cache(conn) -> dict:
+    """从 spirit_pinyin 表加载拼音索引到内存缓存"""
+    cache = {}
+    rows = conn.execute(
+        "SELECT spirit_name, pinyin_full, pinyin_nos, pinyin_initials FROM spirit_pinyin"
+    ).fetchall()
+    for r in rows:
+        d = dict(r)
+        cache[r["spirit_name"]] = d
+        cache[r["pinyin_nos"]] = d   # 全拼(无音调)也可以直接查到
+        cache[r["pinyin_initials"]] = d  # 首字母也可以直接查到
+    return cache
+
+
+def rebuild_pinyin_index():
+    """重建所有精灵的拼音索引（数据迁移/重建用）"""
+    from pypinyin import pinyin, Style
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM spirit_pinyin")
+        rows = conn.execute("SELECT name FROM spirits").fetchall()
+        count = 0
+        for r in rows:
+            name = r["name"]
+            # 生成全拼（带声调）
+            py_full = pinyin(name, style=Style.TONE3)
+            full_str = " ".join([p[0] for p in py_full])
+            # 全拼（无声调）
+            py_no = pinyin(name, style=Style.NORMAL)
+            no_str = " ".join([p[0] for p in py_no])
+            # 首字母缩写
+            py_init = pinyin(name, style=Style.FIRST_LETTER)
+            init_str = "".join([p[0] for p in py_init])
+            conn.execute(
+                "INSERT OR REPLACE INTO spirit_pinyin (spirit_name, pinyin_full, pinyin_nos, pinyin_initials) VALUES (?, ?, ?, ?)",
+                (name, full_str, no_str, init_str)
+            )
+            count += 1
+        conn.commit()
+        global _SPIRIT_PINYIN_CACHE
+        _SPIRIT_PINYIN_CACHE = None  # 清空缓存
+        return count
+    finally:
+        conn.close()
+
+
+def rebuild_skill_pinyin_index():
+    """重建所有技能的拼音索引"""
+    from pypinyin import pinyin, Style
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM skill_pinyin")
+        rows = conn.execute("SELECT name FROM skills").fetchall()
+        count = 0
+        for r in rows:
+            name = r["name"]
+            py_full = pinyin(name, style=Style.TONE3)
+            full_str = " ".join([p[0] for p in py_full])
+            py_no = pinyin(name, style=Style.NORMAL)
+            no_str = " ".join([p[0] for p in py_no])
+            py_init = pinyin(name, style=Style.FIRST_LETTER)
+            init_str = "".join([p[0] for p in py_init])
+            conn.execute(
+                "INSERT OR REPLACE INTO skill_pinyin (skill_name, pinyin_full, pinyin_nos, pinyin_initials) VALUES (?, ?, ?, ?)",
+                (name, full_str, no_str, init_str)
+            )
+            count += 1
+        conn.commit()
+        return count
+    finally:
+        conn.close()
+
+
+def resolve_skill_name(user_input: str) -> str | None:
+    """通过逐级匹配解析技能名称，支持同音字容错
+
+    匹配顺序：
+    1. 精确匹配 → 2. LIKE模糊 → 3. 拼音全拼 → 4. 首字母 → 5. 直接拼音查表
+    """
+    from pypinyin import pinyin, Style
+
+    user_input = user_input.strip()
+    if not user_input:
+        return None
+
+    conn = get_connection()
+    try:
+        # --- 1) 精确匹配 ---
+        row = conn.execute(
+            "SELECT name FROM skills WHERE name = ?", (user_input,)
+        ).fetchone()
+        if row:
+            return row["name"]
+
+        # --- 2) LIKE 模糊匹配 ---
+        row = conn.execute(
+            "SELECT name FROM skills WHERE name LIKE ?", (f"%{user_input}%",)
+        ).fetchone()
+        if row:
+            return row["name"]
+
+        # --- 3) 拼音全拼匹配 ---
+        user_py = pinyin(user_input, style=Style.NORMAL)
+        user_py_str = " ".join([p[0] for p in user_py])
+        if user_py_str:
+            row = conn.execute(
+                "SELECT skill_name FROM skill_pinyin WHERE pinyin_nos = ?",
+                (user_py_str,)
+            ).fetchone()
+            if row:
+                return row["skill_name"]
+
+        # --- 4) 拼音首字母匹配 ---
+        user_init = pinyin(user_input, style=Style.FIRST_LETTER)
+        user_init_str = "".join([p[0] for p in user_init])
+        if user_init_str:
+            row = conn.execute(
+                "SELECT skill_name FROM skill_pinyin WHERE pinyin_initials = ?",
+                (user_init_str,)
+            ).fetchone()
+            if row:
+                return row["skill_name"]
+
+        # --- 5) 直接拼音查表：纯英文（含空格）输入时直接当拼音搜 ---
+        if user_input.isascii() and all(c.isalpha() or c.isspace() for c in user_input):
+            base_nospace = user_input.lower().strip().replace(" ", "")
+            row = conn.execute(
+                "SELECT skill_name FROM skill_pinyin WHERE REPLACE(pinyin_nos, ' ', '') = ?",
+                (base_nospace,)
+            ).fetchone()
+            if not row:
+                row = conn.execute(
+                    "SELECT skill_name FROM skill_pinyin WHERE REPLACE(pinyin_nos, ' ', '') LIKE ?",
+                    (f"{base_nospace}%",)
+                ).fetchone()
+            if row:
+                return row["skill_name"]
+
+        return None
+    finally:
+        conn.close()
+
+
+def resolve_spirit_name(user_input: str) -> str | None:
+    """通过逐级匹配解析精灵名称，支持同音字容错
+
+    匹配顺序：
+    1. 精确匹配 → 2. LIKE模糊匹配 → 3. 拼音全拼匹配 → 4. 拼音首字母匹配 → 5. 直接拼音查表
+    """
+    from pypinyin import pinyin, Style
+
+    user_input = user_input.strip()
+    if not user_input:
+        return None
+
+    conn = get_connection()
+    try:
+        # --- 1) 精确匹配 ---
+        row = conn.execute(
+            "SELECT name FROM spirits WHERE name = ?", (user_input,)
+        ).fetchone()
+        if row:
+            return row["name"]
+
+        # --- 2) LIKE 模糊匹配（保持原来的 %name% 逻辑） ---
+        row = conn.execute(
+            "SELECT name FROM spirits WHERE name LIKE ?", (f"%{user_input}%",)
+        ).fetchone()
+        if row:
+            return row["name"]
+
+        # --- 3) 拼音全拼匹配：将用户输入也转成拼音，与 spirit_pinyin 表对比 ---
+        user_py = pinyin(user_input, style=Style.NORMAL)
+        user_py_str = " ".join([p[0] for p in user_py])
+
+        if user_py_str:
+            row = conn.execute(
+                "SELECT spirit_name FROM spirit_pinyin WHERE pinyin_nos = ?",
+                (user_py_str,)
+            ).fetchone()
+            if row:
+                return row["spirit_name"]
+
+        # --- 4) 拼音首字母匹配 ---
+        user_init = pinyin(user_input, style=Style.FIRST_LETTER)
+        user_init_str = "".join([p[0] for p in user_init])
+        if user_init_str:
+            row = conn.execute(
+                "SELECT spirit_name FROM spirit_pinyin WHERE pinyin_initials = ?",
+                (user_init_str,)
+            ).fetchone()
+            if row:
+                return row["spirit_name"]
+
+        # --- 5) 直接拼音查表：纯英文（含空格）输入时直接当拼音搜 ---
+        if user_input.isascii() and all(c.isalpha() or c.isspace() for c in user_input):
+            base_nospace = user_input.lower().strip().replace(" ", "")
+            row = conn.execute(
+                "SELECT spirit_name FROM spirit_pinyin WHERE REPLACE(pinyin_nos, ' ', '') = ?",
+                (base_nospace,)
+            ).fetchone()
+            if not row:
+                row = conn.execute(
+                    "SELECT spirit_name FROM spirit_pinyin WHERE REPLACE(pinyin_nos, ' ', '') LIKE ?",
+                    (f"{base_nospace}%",)
+                ).fetchone()
+            if row:
+                return row["spirit_name"]
+
+        return None
+    finally:
+        conn.close()
+
+
 # ======================== 蛋查询 ========================
+
 
 def query_egg_by_name(egg_name: str) -> dict | None:
     """根据蛋名或精灵名查询蛋信息"""
@@ -320,10 +601,10 @@ def query_egg_fuzzy(text: str) -> list[dict]:
 # ======================== AI Agent 工具函数 ========================
 
 def query_spirits_by_skill(skill_name: str, type_filter: str = "") -> list[dict]:
-    """查询能学某技能的所有精灵
+    """查询能学某技能的所有精灵（技能名支持同音字容错）
 
     Args:
-        skill_name: 技能名称（支持模糊匹配）
+        skill_name: 技能名称（支持模糊匹配和同音字）
         type_filter: 可选，按属性过滤（如 '火' 只返回火系精灵）
 
     Returns:
@@ -331,10 +612,14 @@ def query_spirits_by_skill(skill_name: str, type_filter: str = "") -> list[dict]
     """
     conn = get_connection()
     try:
-        # 先找技能
+        # 先用 resolve_skill_name 处理同音字/拼音匹配
+        resolved = resolve_skill_name(skill_name)
+        if not resolved:
+            return []
+
+        # 再找技能
         skill = conn.execute(
-            "SELECT id, name FROM skills WHERE name = ? OR name LIKE ?",
-            (skill_name, f"%{skill_name}%")
+            "SELECT id, name FROM skills WHERE name = ?", (resolved,)
         ).fetchone()
         if not skill:
             return []

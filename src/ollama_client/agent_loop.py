@@ -34,7 +34,7 @@ def _build_system_prompt_for_agent() -> str:
 
 🔰 游戏属性：{types_str}
 
-📋 精灵主要字段：name(名称), number(编号), type1(主属性), type2(副属性), description(描述), egg_group(蛋组), evolution_chain(进化链)
+📋 精灵主要字段：name(名称), number(编号), type1(主属性), type2(副属性), ability(特性), ability_effect(特性效果), description(描述), egg_group(蛋组), evolution_chain(进化链)
 📋 技能主要字段：name(名称), skill_type(类型), power(威力), accuracy(精度), pp(PP值), description(描述/效果)
 📋 精灵-技能关联：spirit_id, skill_id, learn_level(学习等级), learn_method(学习方法)
 📋 属性克制：attacker(攻击方), defender(防御方), multiplier(倍率, 如2.0=克制)
