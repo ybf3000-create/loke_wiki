@@ -1,7 +1,7 @@
 # src/ui/entity_popup.py
 # 实体信息弹出窗 - 点击精灵/技能/属性名称时显示详情
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget,
@@ -30,7 +30,9 @@ class EntityPopup(QFrame):
         super().__init__(parent)
         self._entity_type = entity_type
         self._entity_name = entity_name
-        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(
+            Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._init_ui()
@@ -154,35 +156,59 @@ class EntityPopup(QFrame):
         if attr not in ATTRIBUTE_TYPES:
             return f"未知属性「{attr}」"
 
-        lines = [f"🔍 {attr}系 克制关系："]
+        atk_2x = []   # 攻击端 克制
+        atk_05 = []   # 攻击端 抵抗
+        atk_0 = []    # 攻击端 无效
+        def_2x = []   # 防御端 被克
+        def_05 = []   # 防御端 抵抗
+        def_0 = []    # 防御端 免疫
 
-        # 攻击端：该属性攻击各属性的倍率
-        atk_results = []
         for def_type in ATTRIBUTE_TYPES:
             mult = query_type_effectiveness(attr, def_type)
-            if mult is not None and mult != 1.0:
-                label = {2.0: "🟢 克制", 0.5: "🔴 抵抗", 0.0: "⚫ 无效"}.get(mult, f"×{mult}")
-                atk_results.append(f"{def_type} {label}")
-        if atk_results:
-            lines.append("🛡️ 攻击端：")
-            lines.append("，".join(atk_results[:6]))
-            if len(atk_results) > 6:
-                lines.append(f"　... 共 {len(atk_results)} 种")
+            if mult is None:
+                continue
+            if mult == 2.0:
+                atk_2x.append(def_type)
+            elif mult == 0.5:
+                atk_05.append(def_type)
+            elif mult == 0.0:
+                atk_0.append(def_type)
 
-        # 防御端：哪些属性攻击该属性
-        def_results = []
         for atk_type in ATTRIBUTE_TYPES:
             if atk_type == attr:
                 continue
             mult = query_type_effectiveness(atk_type, attr)
-            if mult is not None and mult != 1.0:
-                label = {2.0: "🔴 被克", 0.5: "🟢 抗性", 0.0: "⚫ 免疫"}.get(mult, f"×{mult}")
-                def_results.append(f"{atk_type} {label}")
-        if def_results:
-            lines.append("🛡️ 防御端：")
-            lines.append("，".join(def_results[:6]))
-            if len(def_results) > 6:
-                lines.append(f"　... 共 {len(def_results)} 种")
+            if mult is None:
+                continue
+            if mult == 2.0:
+                def_2x.append(atk_type)
+            elif mult == 0.5:
+                def_05.append(atk_type)
+            elif mult == 0.0:
+                def_0.append(atk_type)
+
+        lines = [f"<b>{attr}系</b> 克制关系"]
+        lines.append("")
+
+        # 攻击端
+        parts = []
+        if atk_2x:
+            parts.append(f"克制 {' '.join(atk_2x)}")
+        if atk_05:
+            parts.append(f"抵抗 {' '.join(atk_05)}")
+        if atk_0:
+            parts.append(f"无效 {' '.join(atk_0)}")
+        lines.append(f"<b>攻击端</b>：{'，'.join(parts) if parts else '无'}")
+
+        # 防御端
+        parts = []
+        if def_2x:
+            parts.append(f"被克 {' '.join(def_2x)}")
+        if def_05:
+            parts.append(f"抵抗 {' '.join(def_05)}")
+        if def_0:
+            parts.append(f"免疫 {' '.join(def_0)}")
+        lines.append(f"<b>防御端</b>：{'，'.join(parts) if parts else '无'}")
 
         return "<br>".join(lines)
 
@@ -217,9 +243,6 @@ def show_entity_popup(entity_type: str, entity_name: str, parent_widget=None):
 
     popup.show()
     popup.raise_()
-
-    # 10秒后自动关闭
-    QTimer.singleShot(10000, popup.close)
 
 
 def close_entity_popup():
