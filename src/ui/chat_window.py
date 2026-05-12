@@ -28,6 +28,8 @@ from src.ollama_client.agent_loop import run_agent_loop
 from src.ui.tray_manager import TrayManager
 from src.voice.voice_module import VoiceModule
 from src.check_deps import check_and_install
+from src.ui.entity_registry import render_html, load_entity_registry
+from src.ui.entity_popup import show_entity_popup, close_entity_popup
 
 
 def _get_font(size=10, bold=False):
@@ -52,7 +54,9 @@ class ChatInputEdit(QTextEdit):
 # ======================== 气泡组件 ========================
 
 class BubbleFrame(QFrame):
-    """聊天气泡容器"""
+    """聊天气泡容器（支持可点击实体）"""
+    entity_clicked = pyqtSignal(str, str)  # (entity_type, entity_name)
+
     def __init__(self, text: str, is_user: bool = True, images_dir: str = None):
         super().__init__()
         self._images_dir = images_dir or str(IMAGES_DIR)
@@ -72,10 +76,16 @@ class BubbleFrame(QFrame):
         for part_type, content in parts:
             if part_type == "text" and content.strip():
                 has_content = True
-                label = QLabel(content.strip())
+                # 使用富文本 QLabel 渲染可点击实体
+                html = render_html(content.strip())
+                label = QLabel()
+                label.setTextFormat(Qt.TextFormat.RichText)
+                label.setText(html)
                 label.setWordWrap(True)
                 label.setFont(_get_font(10))
-                label.setStyleSheet(f"color: {'#000000' if self._is_user or not self._is_user else '#000000'}; background: transparent;")
+                label.setStyleSheet("color: #000000; background: transparent;")
+                label.setOpenExternalLinks(False)
+                label.linkActivated.connect(self._on_link_clicked)
                 layout.addWidget(label)
             elif part_type == "image":
                 has_content = True
@@ -133,6 +143,17 @@ class BubbleFrame(QFrame):
         if not parts:
             parts.append(("text", text))
         return parts
+
+    def _on_link_clicked(self, href: str):
+        """处理可点击文本的链接点击"""
+        # href 格式: "entity_type:entity_name"
+        if ":" not in href:
+            return
+        etype, ename = href.split(":", 1)
+        # 找到气泡所属的顶层窗口
+        window = self.window()
+        if window and isinstance(window, ChatWindow):
+            window._on_entity_clicked(etype, ename)
 
 
 # ======================== 工作线程 ========================
@@ -200,6 +221,8 @@ class ChatWindow(QMainWindow):
         self._msg_count = 0          # 消息计数器（防失忆）
         self.tray = None             # 托盘，稍后初始化
         self.voice = None            # 语音模块，稍后初始化
+        # 加载实体注册表（用于聊天文本高亮）
+        load_entity_registry()
         self._init_ui()
         self._init_ollama()
         self._init_voice()
@@ -660,6 +683,11 @@ class ChatWindow(QMainWindow):
         self._add_bubble(f"⚠️ 查询出错: {err_msg}", is_user=False)
         if self.voice_output_btn.isChecked() and self.voice:
             self.voice.speak("查询出错了")
+
+    def _on_entity_clicked(self, entity_type: str, entity_name: str):
+        """聊天文本中点击了可点击实体"""
+        logger.info(f"实体点击: {entity_type}:{entity_name}")
+        show_entity_popup(entity_type, entity_name, parent_widget=self)
 
     def _clear_chat(self):
         reply = QMessageBox.question(self, "清空对话", "确定要清空所有聊天记录吗？")
